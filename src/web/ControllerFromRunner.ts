@@ -1,4 +1,29 @@
 import * as vscode from "vscode"
+import * as path from "path"
+import * as fs from "fs"
+
+async function replacePathWithContent(content: string, basePath: string): Promise<string> {
+  const filePathRegex = /<%%\s*((?:[a-zA-Z]:|~)?[\\/]?[^\0<>:"|?*\\\/]+(?:[\\/][^\0<>:"|?*\\\/]+)*)\s*%%>/g;
+  const matches = Array.from(content.matchAll(filePathRegex));
+
+  for (const match of matches) {
+    const filePath = match[1];
+    const absolutePath = path.join(basePath, filePath.trimEnd());
+    try {
+      const fileContent = await fs.promises.readFile(absolutePath, "utf8");
+      content = content.replace(match[0], fileContent);
+    } catch (err: any) {
+      vscode.window.showWarningMessage(`Error reading file at path, ${filePath}: ${err.message}`);
+    }
+  }
+
+  return content;
+}
+
+// Retrieves the absolute path of the notebook directory
+const getNotebookDirectoryPath = (notebook: vscode.NotebookDocument): string => {
+  return path.dirname(notebook.uri.fsPath);
+};
 
 export type Message = { content: string; role: string }
 export type Runner = (
@@ -44,13 +69,20 @@ export const ControllerFromRunner =
         nextCell = cell.notebook.cellAt(nextIndex)
       }
 
-      const messages = notebook
-        .getCells(new vscode.NotebookRange(0, activeIndex + 1))
+      const rawMessages = notebook
+      .getCells(new vscode.NotebookRange(0, activeIndex + 1))
         .filter((cell) => cell.kind === vscode.NotebookCellKind.Code)
         .map((cell) => ({
           content: cell.document.getText(),
           role: cell.document.languageId,
         }))
+      
+      const dirPath = getNotebookDirectoryPath(notebook);
+      const messages = [];
+      for (const message of rawMessages) {
+        const content = await replacePathWithContent(message.content, dirPath);
+        messages.push({ ...message, content });
+      }
 
       const clearOutput = async () => {
         const edit = new vscode.WorkspaceEdit()
